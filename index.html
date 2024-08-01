@@ -21,6 +21,25 @@
     <div class="container text-center">
         <h1 class="text-center">Snake Game</h1>
         <p class="text-center">Score: <span id="score">0</span></p>
+        <p class="text-center">Best Score: <span id="bestScore">0</span></p>
+        <div id="replayControls" hidden class="justify-content-center">
+            <button id="playPause" class="btn btn-primary mx-1 my-1">Pause</button>
+            <button id="reset" class="btn btn-secondary mx-1 my-1">Reset</button>
+            <div class="dropdown mx-1 my-1">
+                <button class="btn btn-secondary dropdown-toggle" type="button" id="dropdownMenuButton"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                    Speed
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="dropdownMenuButton">
+                    <li><a class="dropdown-item" style="cursor: pointer;" id="speed1">x3</a></li>
+                    <li><a class="dropdown-item" style="cursor: pointer;" id="speed2">x2</a></li>
+                    <li><a class="dropdown-item" style="cursor: pointer;" id="speed3">x1</a></li>
+                    <li><a class="dropdown-item" style="cursor: pointer;" id="speed4">x0.5</a></li>
+                    <li><a class="dropdown-item" style="cursor: pointer;" id="speed5">x0.25</a></li>
+                </ul>
+            </div>
+        </div>
+
         <div class="form-check form-switch d-flex justify-content-center">
             <input type="checkbox" id="playAI" class="form-check-input me-2">
             <label for="playAI" class="form-check-label me-5">Use AI</label>
@@ -37,6 +56,14 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const box = 20;
+
+        var bestScore = 0;
+
+        if (localStorage.getItem('bestScore')) {
+            bestScore = localStorage.getItem('bestScore');
+        }
+
+        document.getElementById('bestScore').innerText = bestScore;
 
         let snake = [{ x: 9 * box, y: 10 * box }];
         let direction = '';
@@ -107,8 +134,15 @@
                 gameStarted = true;
             }
 
-            if (playAI.checked) {
+            if (playAI.checked && !replayMode) {    
                 aiMove();
+            }
+
+            if (replayMode && replay.length > 0) {
+                const step = replay.shift();
+                snake = step.s;
+                food = step.f;
+                direction = step.d;
             }
 
 
@@ -148,6 +182,12 @@
 
             if ((snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) && (!replayMode || replay.length < 1)) {
                 clearInterval(game);
+                if (snake.length > bestScore) {
+                    bestScore = snake.length;
+                    localStorage.setItem('bestScore', bestScore);
+                    document.getElementById('bestScore').innerText = bestScore;
+                }
+
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'red';
@@ -155,9 +195,13 @@
                 let text = 'Game Over';
                 let textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2, ctx.font);
                 ctx.fillText(text, textCentered.x, textCentered.y);
+                ctx.fillStyle = 'white';
                 ctx.font = "30px sans-serif";
                 text = 'Score: ' + (snake.length);
-                textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2 + 50, ctx.font);
+                textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2 + 40, ctx.font);
+                ctx.fillText(text, textCentered.x, textCentered.y);
+                text = 'Best Score: ' + (snake.length > bestScore ? snake.length : bestScore);
+                textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2 + 75, ctx.font);
                 ctx.fillText(text, textCentered.x, textCentered.y);
 
                 reward -= 50;
@@ -335,6 +379,8 @@
                     replay = JSON.parse(reader.result);
                     replayMode = true;
                     gameStarted = true;
+                    document.getElementById('trainModel').hidden = true;
+                    document.getElementById('replayControls').hidden = false;
                     document.getElementById('loadReplay').hidden = true;
                     document.getElementById('downloadReplay').hidden = true;
                 };
@@ -343,6 +389,37 @@
         });
 
         var game;
+
+        document.getElementById('playPause').addEventListener('click', () => {
+            if (document.getElementById('playPause').innerText === 'Play') {
+                game = setInterval(drawGame, 100);
+                document.getElementById('playPause').innerText = 'Pause';
+            } else {
+                clearInterval(game);
+                document.getElementById('playPause').innerText = 'Play';
+            }
+        });
+
+        document.getElementById('reset').addEventListener('click', () => {
+            clearInterval(game);
+            resetGame();
+            replay = [];
+            document.getElementById('replayControls').hidden = true;
+            replayMode = false;
+            gameStarted = false;
+            document.getElementById('loadReplay').hidden = false;
+            
+        });
+
+        document.querySelectorAll('.dropdown-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const speed = parseFloat(item.innerText.replace('x', ''));
+                clearInterval(game);
+                game = setInterval(drawGame, 100 / speed);
+            });
+        });
+
+        
         loadModel().then(() => {
             game = setInterval(drawGame, 100);
         });

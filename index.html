@@ -8,7 +8,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
         integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-
     <style>
         canvas {
             border: 1px solid #fff;
@@ -24,34 +23,33 @@
         <p class="text-center">Score: <span id="score">0</span></p>
         <div class="form-check form-switch d-flex justify-content-center">
             <input type="checkbox" id="playAI" class="form-check-input me-2">
-            <label for="playAI" class="form-check-label">Use AI</label>
+            <label for="playAI" class="form-check-label me-5">Use AI</label>
+            <input type="checkbox" id="autoTrain" class="form-check-input me-2">
+            <label for="autoTrain" class="form-check-label">Auto Train</label>
         </div>
         <canvas id="gameCanvas" width="400" height="400"></canvas>
         <button id="downloadReplay" class="btn btn-primary" hidden>Download Replay</button>
         <button id="loadReplay" class="btn btn-primary">Load Replay</button>
         <button id="trainModel" hidden class="btn btn-secondary">Train Model with this match</button>
     </div>
+
     <script>
         const canvas = document.getElementById('gameCanvas');
-        /** @type {CanvasRenderingContext2D} */
         const ctx = canvas.getContext('2d');
-
-        var replay = [];
-        var replayMode = false;
-        var gameStarted = false;
-
         const box = 20;
-        let snake = [];
-        snake[0] = { x: 9 * box, y: 10 * box };
-
+        let snake = [{ x: 9 * box, y: 10 * box }];
         let direction = '';
         let food = {
             x: Math.floor(Math.random() * 20) * box,
             y: Math.floor(Math.random() * 20) * box
         };
-
         let model;
         const playAI = document.getElementById('playAI');
+        let replay = [];
+        let replayMode = false;
+        let gameStarted = false;
+
+        let trainingData = [];
 
         async function loadModel() {
             try {
@@ -61,7 +59,7 @@
                 model = tf.sequential();
                 model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
                 model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
-                model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
+                model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
                 console.log('New model created');
             }
         }
@@ -91,6 +89,8 @@
             return { x: x - textWidth / 2, y: y };
         }
 
+        let reward = 0;
+
         function drawGame() {
             if (!replayMode && gameStarted) {
                 replay.push({ s: [...snake], f: { ...food }, d: direction });
@@ -107,13 +107,28 @@
                 document.getElementById('loadReplay').hidden = true;
             }
 
-            if (direction != '') {
+            if (direction !== '') {
                 gameStarted = true;
             }
 
             if (playAI.checked) {
                 aiMove();
             }
+
+            const inputs = getAIInputs(snake, food, direction);
+            while (inputs.length < 14) {
+                inputs.push(0);
+            }
+            const prediction = model.predict(tf.tensor2d([inputs]));
+            const action = prediction.argMax(1).dataSync()[0];
+
+            let labels = [0, 0, 0, 0];
+            labels[action] = 1;
+
+            if (gameStarted) {
+                trainingData.push({ inputs, labels });
+            }
+
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -135,49 +150,70 @@
             if (direction === 'RIGHT') snakeX += box;
             if (direction === 'DOWN') snakeY += box;
 
+            const newHead = { x: snakeX, y: snakeY };
+
             if (snakeX === food.x && snakeY === food.y) {
+                reward += 10;
                 food = {
                     x: Math.floor(Math.random() * 20) * box,
                     y: Math.floor(Math.random() * 20) * box
                 };
                 document.getElementById('score').innerText = snake.length;
             } else {
+                reward -= 0.1;
                 snake.pop();
             }
 
-            const newHead = { x: snakeX, y: snakeY };
             if ((snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) && (!replayMode || replay.length < 1)) {
                 clearInterval(game);
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = 'red';
                 ctx.font = "50px sans-serif";
-                var text = 'Game Over';
-                var textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2, ctx.font);
+                let text = 'Game Over';
+                let textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2, ctx.font);
                 ctx.fillText(text, textCentered.x, textCentered.y);
                 ctx.font = "30px sans-serif";
                 text = 'Score: ' + (snake.length);
                 textCentered = getTextCentered(text, canvas.width / 2, canvas.height / 2 + 50, ctx.font);
                 ctx.fillText(text, textCentered.x, textCentered.y);
 
+                reward -= 50;
+                trainingData.push({ inputs, labels });
+
                 if (!replayMode) {
                     document.getElementById('downloadReplay').hidden = false;
                     document.getElementById('trainModel').hidden = false;
 
+                    if (document.getElementById('autoTrain').checked) {
+                        document.getElementById('trainModel').innerText = 'Training...';
+                        document.getElementById('trainModel').disabled = true;
+                        trainModel(trainingData).then(() => {
+                            console.log('Model trained');
+                            document.getElementById('trainModel').innerText = 'Train Model with this match';
+                            document.getElementById('trainModel').hidden = true;
+                            document.getElementById('trainModel').disabled = false;
+                            resetGame();
+                        });
+                    }
                 }
 
+                reward -= 50;
             }
 
             snake.unshift(newHead);
+
+
         }
-        async function trainModel(trainingData) {
+
+        async function trainModel(trainingDat) {
             const model = tf.sequential();
             model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
             model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
             model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
 
-            const inputs = trainingData.map(data => data.inputs);
-            const labels = trainingData.map(data => data.labels);
+            const inputs = trainingDat.map(data => data.inputs);
+            const labels = trainingDat.map(data => data.labels);
 
             const inputTensor = tf.tensor2d(inputs);
             const labelTensor = tf.tensor2d(labels);
@@ -187,78 +223,8 @@
                 batchSize: 32,
             });
 
-            await model.save('localstorage://snake-model');
-        }
-
-
-        function getAIInputs(snake, food, direction) {
-            const head = snake[0];
-            const foodDistanceX = (food.x - head.x) / canvas.width;
-            const foodDistanceY = (food.y - head.y) / canvas.height;
-
-            let inputs = [
-                foodDistanceX,
-                foodDistanceY,
-                direction === 'LEFT' ? 1 : 0,
-                direction === 'UP' ? 1 : 0,
-                direction === 'RIGHT' ? 1 : 0,
-                direction === 'DOWN' ? 1 : 0,
-                head.x <= 0 ? 1 : 0,
-                head.x >= canvas.width - box ? 1 : 0,
-                head.y <= 0 ? 1 : 0,
-                head.y >= canvas.height - box ? 1 : 0,
-            ];
-
-            for (let i = 1; i < 5; i++) {
-                const pos = {
-                    x: head.x + (direction === 'LEFT' ? -i * box : direction === 'RIGHT' ? i * box : 0),
-                    y: head.y + (direction === 'UP' ? -i * box : direction === 'DOWN' ? i * box : 0)
-                };
-                inputs.push(collision(pos, snake) ? 1 : 0);
-            }
-
-            return inputs;
-
-        }
-
-        function getAIOutput(direction) {
-            if (direction === 'LEFT') {
-                return [1, 0, 0, 0];
-            } else if (direction === 'UP') {
-                return [0, 1, 0, 0];
-            } else if (direction === 'RIGHT') {
-                return [0, 0, 1, 0];
-            } else if (direction === 'DOWN') {
-                return [0, 0, 0, 1];
-            }
-        }
-
-        function collision(head, array) {
-            for (let i = 0; i < array.length; i++) {
-                if (head.x === array[i].x && head.y === array[i].y) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        function aiMove() {
-            const inputs = getAIInputs();
-            while (inputs.length < 14) {
-                inputs.push(0);
-            }
-            const prediction = model.predict(tf.tensor2d([inputs]));
-            const action = prediction.argMax(1).dataSync()[0];
-
-            if (action === 0 && direction !== 'RIGHT') {
-                direction = 'LEFT';
-            } else if (action === 1 && direction !== 'DOWN') {
-                direction = 'UP';
-            } else if (action === 2 && direction !== 'LEFT') {
-                direction = 'RIGHT';
-            } else if (action === 3 && direction !== 'UP') {
-                direction = 'DOWN';
-            }
+            await saveModel();
+            trainingData = [];
         }
 
 
@@ -291,6 +257,50 @@
             return inputs;
         }
 
+        function getAIOutput() {
+            if (!model) return [0, 0, 0, 0];
+            const inputs = getAIInputs();
+            while (inputs.length < 14) {
+                inputs.push(0);
+            }
+            const prediction = model.predict(tf.tensor2d([inputs]));
+            const action = prediction.argMax(1).dataSync()[0];
+            return [action === 0 ? 1 : 0, action === 1 ? 1 : 0, action === 2 ? 1 : 0, action === 3 ? 1 : 0];
+        }
+
+        function collision(head, array) {
+            return array.some(segment => head.x === segment.x && head.y === segment.y);
+        }
+
+        function aiMove() {
+            const output = getAIOutput();
+            if (output[0] === 1 && direction !== 'RIGHT') {
+                direction = 'LEFT';
+            } else if (output[1] === 1 && direction !== 'DOWN') {
+                direction = 'UP';
+            } else if (output[2] === 1 && direction !== 'LEFT') {
+                direction = 'RIGHT';
+            } else if (output[3] === 1 && direction !== 'UP') {
+                direction = 'DOWN';
+            }
+        }
+
+        function resetGame() {
+            snake = [{ x: 9 * box, y: 10 * box }];
+            direction = '';
+            food = {
+                x: Math.floor(Math.random() * 20) * box,
+                y: Math.floor(Math.random() * 20) * box
+            };
+            replay = [];
+            replayMode = false;
+            gameStarted = false;
+            stateHistory = [];
+            actionHistory = [];
+            rewardHistory = [];
+            game = setInterval(drawGame, 100);
+        }
+
         document.getElementById('downloadReplay').addEventListener('click', () => {
             const replayJson = JSON.stringify(replay);
             const blob = new Blob([replayJson], { type: 'application/json' });
@@ -303,13 +313,15 @@
         });
 
         document.getElementById('trainModel').addEventListener('click', () => {
-            const trainingData = replay.map(data => {
-                const inputs = getAIInputs(data.s, data.f, data.d);
-                const labels = getAIOutput(data.d);
-                return { inputs, labels };
-            });
+            document.getElementById('trainModel').disabled = true;
+            document.getElementById('trainModel').innerText = 'Training...';
+            document.getElementById('downloadReplay').hidden = true;
             trainModel(trainingData).then(() => {
                 console.log('Model trained');
+                document.getElementById('trainModel').innerText = 'Train Model with this match';
+                document.getElementById('trainModel').hidden = true;
+                document.getElementById('trainModel').disabled = false;
+                resetGame();
             });
         });
 
@@ -332,7 +344,7 @@
             });
         });
 
-        var game
+        var game;
         loadModel().then(() => {
             game = setInterval(drawGame, 100);
         });

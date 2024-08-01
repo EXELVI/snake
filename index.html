@@ -37,19 +37,19 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const box = 20;
+
         let snake = [{ x: 9 * box, y: 10 * box }];
         let direction = '';
         let food = {
             x: Math.floor(Math.random() * 20) * box,
             y: Math.floor(Math.random() * 20) * box
         };
-        let model;
+
         const playAI = document.getElementById('playAI');
         let replay = [];
         let replayMode = false;
         let gameStarted = false;
-
-        let trainingData = [];
+        const adam = tf.train.adam(0.001);
 
         async function loadModel() {
             try {
@@ -57,9 +57,10 @@
                 console.log('Model loaded from local storage');
             } catch (e) {
                 model = tf.sequential();
-                model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
+                model.add(tf.layers.dense({ units: 256, activation: 'relu', inputShape: [8] }));
+                model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
                 model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
-                model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
+                model.compile({ optimizer: adam, loss: 'meanSquaredError' });
                 console.log('New model created');
             }
         }
@@ -89,18 +90,13 @@
             return { x: x - textWidth / 2, y: y };
         }
 
+
+
         let reward = 0;
 
         function drawGame() {
             if (!replayMode && gameStarted) {
                 replay.push({ s: [...snake], f: { ...food }, d: direction });
-            }
-
-            if (replayMode && replay.length > 0) {
-                const data = replay.shift();
-                snake = data.s;
-                food = data.f;
-                direction = data.d;
             }
 
             if (gameStarted) {
@@ -113,20 +109,6 @@
 
             if (playAI.checked) {
                 aiMove();
-            }
-
-            const inputs = getAIInputs(snake, food, direction);
-            while (inputs.length < 14) {
-                inputs.push(0);
-            }
-            const prediction = model.predict(tf.tensor2d([inputs]));
-            const action = prediction.argMax(1).dataSync()[0];
-
-            let labels = [0, 0, 0, 0];
-            labels[action] = 1;
-
-            if (gameStarted) {
-                trainingData.push({ inputs, labels });
             }
 
 
@@ -179,111 +161,129 @@
                 ctx.fillText(text, textCentered.x, textCentered.y);
 
                 reward -= 50;
-                trainingData.push({ inputs, labels });
 
                 if (!replayMode) {
                     document.getElementById('downloadReplay').hidden = false;
                     document.getElementById('trainModel').hidden = false;
 
                     if (document.getElementById('autoTrain').checked) {
-                        document.getElementById('trainModel').innerText = 'Training...';
-                        document.getElementById('trainModel').disabled = true;
-                        trainModel(trainingData).then(() => {
-                            console.log('Model trained');
-                            document.getElementById('trainModel').innerText = 'Train Model with this match';
-                            document.getElementById('trainModel').hidden = true;
-                            document.getElementById('trainModel').disabled = false;
+
+                        trainModelWithReplay(replay).then(() => {
                             resetGame();
+                            document.getElementById('downloadReplay').hidden = true;
+                            document.getElementById('trainModel').hidden = true;
                         });
+
+
                     }
                 }
 
-                reward -= 50;
             }
 
             snake.unshift(newHead);
 
-
         }
 
-        async function trainModel(trainingDat) {
-            const model = tf.sequential();
-            model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
-            model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
-            model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
-
-            const inputs = trainingDat.map(data => data.inputs);
-            const labels = trainingDat.map(data => data.labels);
-
-            const inputTensor = tf.tensor2d(inputs);
-            const labelTensor = tf.tensor2d(labels);
-
-            await model.fit(inputTensor, labelTensor, {
-                epochs: 10,
-                batchSize: 32,
-            });
-
-            await saveModel();
-            trainingData = [];
-        }
-
-
-        function getAIInputs() {
-            const head = snake[0];
-            const foodDistanceX = (food.x - head.x) / canvas.width;
-            const foodDistanceY = (food.y - head.y) / canvas.height;
-
-            let inputs = [
-                foodDistanceX,
-                foodDistanceY,
-                direction === 'LEFT' ? 1 : 0,
-                direction === 'UP' ? 1 : 0,
-                direction === 'RIGHT' ? 1 : 0,
-                direction === 'DOWN' ? 1 : 0,
-                head.x <= 0 ? 1 : 0,
-                head.x >= canvas.width - box ? 1 : 0,
-                head.y <= 0 ? 1 : 0,
-                head.y >= canvas.height - box ? 1 : 0,
-            ];
-
-            for (let i = 1; i < 5; i++) {
-                const pos = {
-                    x: head.x + (direction === 'LEFT' ? -i * box : direction === 'RIGHT' ? i * box : 0),
-                    y: head.y + (direction === 'UP' ? -i * box : direction === 'DOWN' ? i * box : 0)
-                };
-                inputs.push(collision(pos, snake) ? 1 : 0);
-            }
-
-            return inputs;
-        }
-
-        function getAIOutput() {
-            if (!model) return [0, 0, 0, 0];
-            const inputs = getAIInputs();
-            while (inputs.length < 14) {
-                inputs.push(0);
-            }
-            const prediction = model.predict(tf.tensor2d([inputs]));
-            const action = prediction.argMax(1).dataSync()[0];
-            return [action === 0 ? 1 : 0, action === 1 ? 1 : 0, action === 2 ? 1 : 0, action === 3 ? 1 : 0];
-        }
 
         function collision(head, array) {
             return array.some(segment => head.x === segment.x && head.y === segment.y);
         }
 
+        function getData(replay) {
+            const inputs = [];
+            const outputs = [];
+
+            replay.forEach((step, index) => {
+                if (index < replay.length - 1) {
+                    const input = [
+                        step.f.x > step.s[0].x ? 1 : 0,
+                        step.f.y > step.s[0].y ? 1 : 0,
+                        step.f.x < step.s[0].x ? 1 : 0,
+                        step.f.y < step.s[0].y ? 1 : 0,
+                        step.d === 'LEFT',
+                        step.d === 'UP',
+                        step.d === 'RIGHT',
+                        step.d === 'DOWN'
+                    ];
+
+                    const nextStep = replay[index + 1];
+                    const output = [0, 0, 0, 0];
+                    if (nextStep.d === 'LEFT') output[0] = 1;
+                    if (nextStep.d === 'UP') output[1] = 1;
+                    if (nextStep.d === 'RIGHT') output[2] = 1;
+                    if (nextStep.d === 'DOWN') output[3] = 1;
+
+                    inputs.push(input);
+                    outputs.push(output);
+                }
+            });
+
+            return { inputs, outputs };
+        }
+
+
+        async function trainModelWithReplay(replay) {
+            model.compile({ optimizer: adam, loss: 'meanSquaredError' });
+            const dataset = getData(replay);
+            const inputs = tf.tensor(dataset.inputs);
+            const outputs = tf.tensor(dataset.outputs);
+
+            await model.fit(inputs, outputs, {
+                epochs: 10,
+                batchSize: 32,
+                callbacks: {
+                    onEpochEnd: (epoch, logs) => {
+                        console.log(`Epoch ${epoch + 1}: loss = ${logs.loss}`);
+                    }
+                }
+            });
+
+            await saveModel();
+            console.log('Model trained and saved!');
+        }
+
+
+
+
+        function getAiInput() {
+            const head = snake[0];
+            const foodDir = [
+                head.x > food.x ? 1 : 0,
+                head.y > food.y ? 1 : 0,
+                head.x < food.x ? 1 : 0,
+                head.y < food.y ? 1 : 0
+            ];
+
+            const danger = [
+                direction === 'LEFT' && (head.x - box < 0 || collision({ x: head.x - box, y: head.y }, snake)),
+                direction === 'UP' && (head.y - box < 0 || collision({ x: head.x, y: head.y - box }, snake)),
+                direction === 'RIGHT' && (head.x + box >= canvas.width || collision({ x: head.x + box, y: head.y }, snake)),
+                direction === 'DOWN' && (head.y + box >= canvas.height || collision({ x: head.x, y: head.y + box }, snake))
+            ];
+
+            return [...foodDir, ...danger];
+        }
+
+
+
+
+
         function aiMove() {
-            const output = getAIOutput();
-            if (output[0] === 1 && direction !== 'RIGHT') {
+            const input = getAiInput();
+            const output = model.predict(tf.tensor([input])).arraySync()[0];
+            const maxIndex = output.indexOf(Math.max(...output));
+
+            if (maxIndex === 0 && direction !== 'RIGHT') {
                 direction = 'LEFT';
-            } else if (output[1] === 1 && direction !== 'DOWN') {
+            } else if (maxIndex === 1 && direction !== 'DOWN') {
                 direction = 'UP';
-            } else if (output[2] === 1 && direction !== 'LEFT') {
+            } else if (maxIndex === 2 && direction !== 'LEFT') {
                 direction = 'RIGHT';
-            } else if (output[3] === 1 && direction !== 'UP') {
+            } else if (maxIndex === 3 && direction !== 'UP') {
                 direction = 'DOWN';
             }
         }
+
 
         function resetGame() {
             snake = [{ x: 9 * box, y: 10 * box }];
@@ -295,9 +295,7 @@
             replay = [];
             replayMode = false;
             gameStarted = false;
-            stateHistory = [];
-            actionHistory = [];
-            rewardHistory = [];
+            reward = 0;
             game = setInterval(drawGame, 100);
         }
 
@@ -312,18 +310,18 @@
             URL.revokeObjectURL(url);
         });
 
-        document.getElementById('trainModel').addEventListener('click', () => {
+        document.getElementById('trainModel').addEventListener('click', async () => {
             document.getElementById('trainModel').disabled = true;
             document.getElementById('trainModel').innerText = 'Training...';
             document.getElementById('downloadReplay').hidden = true;
-            trainModel(trainingData).then(() => {
-                console.log('Model trained');
-                document.getElementById('trainModel').innerText = 'Train Model with this match';
-                document.getElementById('trainModel').hidden = true;
-                document.getElementById('trainModel').disabled = false;
-                resetGame();
-            });
+
+            await trainModelWithReplay(replay);
+
+            document.getElementById('trainModel').disabled = false;
+            document.getElementById('trainModel').innerText = 'Train Model with this match';
+            console.log('Training completed');
         });
+
 
         document.getElementById('loadReplay').addEventListener('click', () => {
             const input = document.createElement('input');

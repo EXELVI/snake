@@ -29,6 +29,7 @@
         <canvas id="gameCanvas" width="400" height="400"></canvas>
         <button id="downloadReplay" class="btn btn-primary" hidden>Download Replay</button>
         <button id="loadReplay" class="btn btn-primary">Load Replay</button>
+        <button id="trainModel" hidden class="btn btn-secondary">Train Model with this match</button>
     </div>
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -58,7 +59,7 @@
                 console.log('Model loaded from local storage');
             } catch (e) {
                 model = tf.sequential();
-                model.add(tf.layers.dense({ inputShape: [24], units: 16, activation: 'relu' }));
+                model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
                 model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
                 model.compile({ optimizer: 'adam', loss: 'meanSquaredError' });
                 console.log('New model created');
@@ -161,47 +162,34 @@
 
                 if (!replayMode) {
                     document.getElementById('downloadReplay').hidden = false;
-                    saveModel();
+                    document.getElementById('trainModel').hidden = false;
+
                 }
 
             }
 
             snake.unshift(newHead);
         }
+        async function trainModel(trainingData) {
+            const model = tf.sequential();
+            model.add(tf.layers.dense({ inputShape: [14], units: 16, activation: 'relu' }));
+            model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
+            model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
 
-        async function trainModel() {
-            // Verifica se ci sono replay salvati
-            if (replay.length === 0) {
-                console.log('No replay data to train the model.');
-                return;
-            }
-
-            // Preparare i dati di input e output
-            const inputs = [];
-            const outputs = [];
-
-            for (const data of replay) {
-                const { s, f, d } = data;
-                const input = getAIInputs(s, f, d);
-                const output = getAIOutput(d); // Questa funzione deve convertire la direzione in un formato adatto
-
-                inputs.push(input);
-                outputs.push(output);
-            }
+            const inputs = trainingData.map(data => data.inputs);
+            const labels = trainingData.map(data => data.labels);
 
             const inputTensor = tf.tensor2d(inputs);
-            const outputTensor = tf.tensor2d(outputs);
+            const labelTensor = tf.tensor2d(labels);
 
-            // Addestra il modello
-            await model.fit(inputTensor, outputTensor, {
+            await model.fit(inputTensor, labelTensor, {
                 epochs: 10,
-                batchSize: 8,
-                callbacks: tf.callbacks.earlyStopping({ monitor: 'loss', patience: 2 })
+                batchSize: 32,
             });
 
-            await saveModel();
-            console.log('Model training complete and saved.');
+            await model.save('localstorage://snake-model');
         }
+
 
         function getAIInputs(snake, food, direction) {
             const head = snake[0];
@@ -230,27 +218,20 @@
             }
 
             return inputs;
+
         }
 
         function getAIOutput(direction) {
-            const output = [0, 0, 0, 0];
-            switch (direction) {
-                case 'LEFT':
-                    output[0] = 1;
-                    break;
-                case 'UP':
-                    output[1] = 1;
-                    break;
-                case 'RIGHT':
-                    output[2] = 1;
-                    break;
-                case 'DOWN':
-                    output[3] = 1;
-                    break;
+            if (direction === 'LEFT') {
+                return [1, 0, 0, 0];
+            } else if (direction === 'UP') {
+                return [0, 1, 0, 0];
+            } else if (direction === 'RIGHT') {
+                return [0, 0, 1, 0];
+            } else if (direction === 'DOWN') {
+                return [0, 0, 0, 1];
             }
-            return output;
         }
-
 
         function collision(head, array) {
             for (let i = 0; i < array.length; i++) {
@@ -263,7 +244,7 @@
 
         function aiMove() {
             const inputs = getAIInputs();
-            while (inputs.length < 24) {
+            while (inputs.length < 14) {
                 inputs.push(0);
             }
             const prediction = model.predict(tf.tensor2d([inputs]));
@@ -279,6 +260,7 @@
                 direction = 'DOWN';
             }
         }
+
 
         function getAIInputs() {
             const head = snake[0];
@@ -309,8 +291,6 @@
             return inputs;
         }
 
-
-
         document.getElementById('downloadReplay').addEventListener('click', () => {
             const replayJson = JSON.stringify(replay);
             const blob = new Blob([replayJson], { type: 'application/json' });
@@ -320,6 +300,17 @@
             a.download = 'replay.json';
             a.click();
             URL.revokeObjectURL(url);
+        });
+
+        document.getElementById('trainModel').addEventListener('click', () => {
+            const trainingData = replay.map(data => {
+                const inputs = getAIInputs(data.s, data.f, data.d);
+                const labels = getAIOutput(data.d);
+                return { inputs, labels };
+            });
+            trainModel(trainingData).then(() => {
+                console.log('Model trained');
+            });
         });
 
         document.getElementById('loadReplay').addEventListener('click', () => {

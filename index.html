@@ -16,9 +16,14 @@
 </head>
 
 <body>
+    
     <div class="container text-center">
         <h1 class="text-center">Snake Game</h1>
         <p class="text-center">Score: <span id="score">0</span></p>
+        <div class="form-check form-switch d-flex justify-content-center">
+            <input type="checkbox" id="playAI" class="form-check-input me-2">
+            <label for="playAI" class="form-check-label">Use AI</label>
+        </div>
         <canvas id="gameCanvas" width="400" height="400"></canvas>
         <button id="downloadReplay" class="btn btn-primary" hidden>Download Replay</button>
         <button id="loadReplay" class="btn btn-primary">Load Replay</button>
@@ -56,6 +61,45 @@
             }
         }
 
+        
+        function aiDecision() {
+            const playAI = document.getElementById('playAI').checked;
+            if (!playAI) return;
+
+            let possibleDirections = ['LEFT', 'UP', 'RIGHT', 'DOWN'];
+            let bestDirection = '';
+
+            let bestDistance = Number.MAX_SAFE_INTEGER;
+
+            for (let i = 0; i < possibleDirections.length; i++) {
+                let newDirection = possibleDirections[i];
+                let snakeX = snake[0].x;
+                let snakeY = snake[0].y;
+
+                if (newDirection === 'LEFT') snakeX -= box;
+                if (newDirection === 'UP') snakeY -= box;
+                if (newDirection === 'RIGHT') snakeX += box;
+                if (newDirection === 'DOWN') snakeY += box;
+
+                const newHead = { x: snakeX, y: snakeY };
+
+                if (snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) {
+                    continue;
+                }
+
+                const foodDistance = Math.abs(food.x - snakeX) + Math.abs(food.y - snakeY);
+                if (foodDistance < bestDistance) {
+                    bestDistance = foodDistance;
+                    bestDirection = newDirection;
+                }
+            }
+
+            direction = bestDirection;
+
+
+        }
+
+
         function getTextCentered(text, x, y, font) {
             ctx.font = font;
             const textWidth = ctx.measureText(text).width;
@@ -68,10 +112,10 @@
             }
 
             if (replayMode && replay.length > 0) {
-                const replayData = replay.shift();
-                snake = replayData.s;
-                food = replayData.f;
-                direction = replayData.d;
+                const data = replay.shift();
+                snake = data.s;
+                food = data.f;
+                direction = data.d;
             }
 
             if (gameStarted) {
@@ -81,6 +125,8 @@
             if (direction != '') {
                 gameStarted = true;
             }
+
+            aiDecision();
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -113,8 +159,7 @@
             }
 
             const newHead = { x: snakeX, y: snakeY };
-
-            if (snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) {
+            if ((snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) && (!replayMode || replay.length < 1)) {
                 clearInterval(game);
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);

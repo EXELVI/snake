@@ -7,6 +7,7 @@
     <title>Snake</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
         integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <style>
         canvas {
             border: 1px solid #fff;
@@ -16,7 +17,6 @@
 </head>
 
 <body>
-    
     <div class="container text-center">
         <h1 class="text-center">Snake Game</h1>
         <p class="text-center">Score: <span id="score">0</span></p>
@@ -36,7 +36,7 @@
         var replay = [];
         var replayMode = false;
         var gameStarted = false;
-        
+
         const box = 20;
         let snake = [];
         snake[0] = { x: 9 * box, y: 10 * box };
@@ -61,44 +61,85 @@
             }
         }
 
-        
-        function aiDecision() {
+        let model;
+        async function loadModel() {
+            try {
+                model = await tf.loadLayersModel('localstorage://snake-ai-model');
+                console.log('Model loaded from local storage.');
+            } catch (e) {
+                model = tf.sequential();
+                model.add(tf.layers.dense({ inputShape: [6], units: 24, activation: 'relu' }));
+                model.add(tf.layers.dense({ units: 4, activation: 'softmax' }));
+                model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy' });
+                console.log('New model created.');
+            }
+        }
+
+        async function trainModel() {
+            const inputs = [];
+            const labels = [];
+
+            replay.forEach(step => {
+                const head = step.s[0];
+                const food = step.f;
+                const direction = step.d;
+
+                const input = [
+                    head.x / canvas.width, head.y / canvas.height, 
+                    food.x / canvas.width, food.y / canvas.height,
+                    direction === 'LEFT' ? 1 : 0,
+                    direction === 'UP' ? 1 : 0,
+                    direction === 'RIGHT' ? 1 : 0,
+                    direction === 'DOWN' ? 1 : 0
+                ];
+                inputs.push(input.slice(0, 6)); 
+
+                const label = [0, 0, 0, 0];
+                if (direction === 'LEFT') label[0] = 1;
+                if (direction === 'UP') label[1] = 1;
+                if (direction === 'RIGHT') label[2] = 1;
+                if (direction === 'DOWN') label[3] = 1;
+                labels.push(label);
+            });
+
+            const xs = tf.tensor2d(inputs);
+            const ys = tf.tensor2d(labels);
+
+            await model.fit(xs, ys, {
+                epochs: 10,
+                shuffle: true
+            });
+
+            await model.save('localstorage://snake-ai-model');
+            console.log('Model trained and saved.');
+        }
+
+
+
+        async function aiDecision() {
             const playAI = document.getElementById('playAI').checked;
             if (!playAI) return;
 
-            let possibleDirections = ['LEFT', 'UP', 'RIGHT', 'DOWN'];
-            let bestDirection = '';
-
-            let bestDistance = Number.MAX_SAFE_INTEGER;
-
-            for (let i = 0; i < possibleDirections.length; i++) {
-                let newDirection = possibleDirections[i];
-                let snakeX = snake[0].x;
-                let snakeY = snake[0].y;
-
-                if (newDirection === 'LEFT') snakeX -= box;
-                if (newDirection === 'UP') snakeY -= box;
-                if (newDirection === 'RIGHT') snakeX += box;
-                if (newDirection === 'DOWN') snakeY += box;
-
-                const newHead = { x: snakeX, y: snakeY };
-
-                if (snakeX < 0 || snakeX >= canvas.width || snakeY < 0 || snakeY >= canvas.height || collision(newHead, snake)) {
-                    continue;
-                }
-
-                const foodDistance = Math.abs(food.x - snakeX) + Math.abs(food.y - snakeY);
-                if (foodDistance < bestDistance) {
-                    bestDistance = foodDistance;
-                    bestDirection = newDirection;
-                }
-            }
-
-            direction = bestDirection;
+            if (!model) {
+        console.warn('Model is not loaded yet.');
+        return;
+    }
 
 
+            const head = snake[0];
+            const input = tf.tensor2d([[
+                head.x, head.y, food.x, food.y,
+                direction === 'LEFT' ? 1 : 0,
+                direction === 'UP' ? 1 : 0
+            ]]);
+
+            const prediction = model.predict(input);
+            const actions = ['LEFT', 'UP', 'RIGHT', 'DOWN'];
+            direction = actions[prediction.argMax(1).dataSync()[0]];
+
+            input.dispose();
+            prediction.dispose();
         }
-
 
         function getTextCentered(text, x, y, font) {
             ctx.font = font;
@@ -175,8 +216,8 @@
 
                 if (!replayMode) {
                     document.getElementById('downloadReplay').hidden = false;
+                    trainModel();
                 }
-                
             }
 
             snake.unshift(newHead);
@@ -220,8 +261,10 @@
                 reader.readAsText(file);
             });
         });
-
-        const game = setInterval(drawGame, 100);
+        var game;
+        loadModel().then(() => {
+            game = setInterval(drawGame, 100);
+        });
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"

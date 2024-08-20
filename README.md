@@ -4,7 +4,8 @@
 
 ![Bootstrap](https://img.shields.io/badge/Bootstrap-5.3.3-7952B3?style=for-the-badge&logo=bootstrap)
 
-This is a classic Snake game implemented in JavaScript with an added feature: **AI integration using TensorFlow.js**. The AI can learn to play the game through reinforcement learning, and you can save and load the AI's training data to improve its performance over time.
+This is a classic Snake game implemented in JavaScript.
+(The AI doesn't work)
 
 ## Features
 
